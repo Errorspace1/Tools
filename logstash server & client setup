@@ -1,0 +1,152 @@
+a) The main prerequisite for running logstash central server is to have Java installed. Because logstash runs inside a Java Virtual Machine. 
+        apt-get install openjdk-7-jdk
+        java -version
+b) Following ports need to be opened. 
+•	Port 9200 for Elasticsearch 
+•	Port range 9200-9400. Elasticsearch, by default listens on port [9200-9300] for HTTP traffic and on port [9300-9400] for node-to-node communication. (the range means that if the port is busy, it will automatically try the next port). 
+•	Port 80 for Kibana. 
+•	Port 6379 for Redis 
+2) Installation 
+a) Logstash installation: Create three different directories which will hold logstash application, other will hold configuration files and the third will hold logs related to logstash itself. 
+       mkdir /opt/logstash 
+       mkdir /etc/logstash 
+       cd /opt
+       wget https://download.elasticsearch.org/logstash/logstash/logstash-1.4.2.zip
+       unzip logstash-1.4.2.zip
+       mv logstash-1.4.2.zip logstash
+       cd /opt/logstash
+b) Install Redis server: Redis acts like a buffer for log data, till logstash indexes it and stores it. As it is in RAM its too fast 
+       apt-get install redis-server
+Modify the redis configuration file so that it will listen on all interfaces, and not only localhost 127.0.0.1. This can be done by commenting out the below line in the redis configuration file /etc/redis/redis.conf. 
+#bind 127.0.0.1 
+Restart redis server by the below command. 
+       service redis-server restart
+Testing redis server can be done by connecting to our redis server instance using redis-cli command and then issuing the command "PING". If all is well, you should get an output of "PONG" 
+       root@logstash-server:~$ redis-cli -h 10.135.63.101
+       10.135.63.101:6379> PING
+       PONG
+       10.135.63.101:6379> exit
+c) Install Elasticsearch: 
+       wget https://download.elasticsearch.org/elasticsearch/elasticsearch/elasticsearch-1.3.0.deb
+       dpkg -i elasticsearch-1.3.0.deb
+       service elasticsearch restart
+Elasticsearch by default runs on port 9200. You will be able to double check this, by browsing the webpage <Server's IP address>:9200 
+d) Install Kibana: 
+       wget https://download.elasticsearch.org/kibana/kibana/kibana-3.1.0.zip
+       unzip kibana-3.1.0.zip
+3) Configuration 
+a) Configure Logstash Certral Server file: 
+Create a file named server.conf inside /etc/logstash/, and copy paste the below contents inside. 
+input {
+   redis {
+      host => "10.135.63.101"
+      type => "redis"
+      data_type => "list"
+      key => "logstash"
+   }
+}
+output {
+   stdout { }
+   elasticsearch {
+      host => "10.135.63.101"
+      cluster => "logstash"
+      embedded => "true"
+         codec => json {
+         charset => "UTF-8"
+         }
+      }
+}
+Our input and output blocks are very simple to understand. It says take input from redis instance on 10.135.63.101 (which is our host itself) and whatever logstash finds in redis mark it with a key of "logstash". 
+Main logstash central server configuration file is ready. Let's go ahead and start our logstash service by using the below command. 
+       /opt/logstash/bin/logstash agent -v -f /etc/logstash/server.conf --log /logstash/data/log/server.log & 
+A better way to start/stop/ and restart logstash service is to make an init script for it. 
+b) Configure Elasticsearch for logstash: 
+You can find the current cluster name by accessing the elasticsearch configuration file /etc/elasticsearch/elasticsearch.yml update the file with cluster name and node name. 
+       cluster.name: logstash 
+       node.name: "JioCloud Logstash"
+       node.max_local_storage_nodes: 1
+       path.data: /mnt/data/elasticsearch
+       path.work: /mnt/data/elasticsearch/work
+       path.logs: /var/log/elasticsearch
+       http.port: 9200
+       discovery.zen.ping.multicast.enabled: false
+       discovery.zen.ping.unicast.hosts: ["10.135.63.101:9200"]
+Restart elasticsearch service 
+       /etc/init.d/elasticsearch restart
+c) Configure kibana web interface for logstash: 
+Unzip the downloaded file (kibana-3.1.0) and change the default document root for nginx (simply modify the file /etc/nginx/sites-available/default, and replace the root directive pointing to our kibana folder we just uncompressed.), so that it points to our newly unzipped kibana directory. 
+Restart nginx and point your browser to your server ip and it will take you to the default kibana logstash console. 
+       /etc/init.d/nginx restart
+d) Configure logstash agents to send logs to our logstash central server 
+Create the exact directory structure; we did for logstash central server 
+       mkdir /opt/logstash
+       mkdir /etc/logstash
+       mkdir /var/log/logstash
+       wget https://download.elasticsearch.org/logstash/logstash/logstash-1.4.2.zip
+       unzip logstash-1.4.2.zip
+       mv logstash-1.4.2 logstash
+       cd /opt/logstash
+Create the configuration file (shipper.conf or agent.conf) for our agent under /etc/logstash/ folder. Here the inputs will be the files (the log files that you want to send to our central log server), and the output will be our redis broker installed on the central logstash server. The content should look like the below. 
+input {
+        file {
+                type => "TomcatServerLogs"
+                path => "/usrdata/logs/tomcatlogs/*.log"
+                start_position => beginning
+                tags => "JioDrive Gateway Prod"
+        }
+        file {
+                type => "ApplicationLogs"
+                path => "/usrdata/logs/applogs/*log"
+                start_position => beginning
+                tags => "JioDrive Gateway Prod"
+        }
+        file {
+                type => "DatabaseServerLogs"
+                path => "/usrdata/pgsql/logs/*.log"
+                start_position => beginning
+                tags => "JioDrive Gateway Prod"
+        }
+        file {
+                type => "WSO2ESBLogs"
+                path => "/usrdata/logs/wso2-esb*.log"
+                start_position => beginning
+                tags => "JioDrive Gateway Prod"
+        }
+        file {
+                type => "WSO2DSSLogs"
+                path => [ "/usrdata/logs/wso2-dss*.log", "/usrdata/logs/audit.log" ]
+                start_position => beginning
+                tags => "JioDrive Gateway Prod"
+        }
+        file {
+                type => "BatchServerLogs"
+                path => "/usrdata/logs/batchlogs/*.log"
+                start_position => beginning
+                tags => "JioDrive Gateway Prod"
+        }
+        file {
+                type => "WSLogs"
+                path => "/var/log/squid3/access.log"
+                start_position => beginning
+                tags => "JioDrive Gateway Prod"
+        }
+}
+
+filter{
+    multiline {
+            pattern => "(^.+Exception.*)|(^\s+at .+)|(^\s+... \d+ more)|(^\s*Caused by:.+)|(^\s*Message:.+)"
+            what => "previous"
+    }
+}
+
+output {
+stdout { }
+        redis {
+                host => "10.135.63.101"
+                port => 6379
+                data_type => "list"
+                key => "logstash"
+        }
+}
+Here we are sending various types of logs to redis server on 10.135.63.101 (which is IP of centralized logstash server where redis is installed). Let's go ahead and start our logstash shipper service by using the below command. 
+       /opt/logstash/bin/logstash agent -f /etc/logstash/shipper.conf --log /logstash/data/log/shipper.log & 
